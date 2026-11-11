@@ -105,7 +105,11 @@ const carCatalog = [
   { id: 'Orion S', type: 'GRAND TOURER', price: 7400, color: 0xf55378, speed: 52, accel: 26, handling: 2.05, mass: 1.13, shape: 'gt' },
   { id: 'Phantom 9', type: 'HYPERSPORT', price: 11000, color: 0xffbd63, speed: 68, accel: 36, handling: 2.35, mass: .92, shape: 'hyper' }
 ];
-const owned = new Set(['Vanta R']);
+const savedProgress = (() => {
+  try { return JSON.parse(localStorage.getItem('neon-district-save') || '{}') || {}; }
+  catch { return {}; }
+})();
+const owned = new Set(['Vanta R', ...(Array.isArray(savedProgress.owned) ? savedProgress.owned : [])]);
 function createCar(def, paint = def.color) {
   const g = new THREE.Group();
   g.userData = { def, paint, speed: 0, heading: 0, upgrades: { engine: 0, handling: 0 }, wheelStyle: false };
@@ -135,7 +139,11 @@ function createCar(def, paint = def.color) {
   return g;
 }
 function parkCar(def, x, z, heading = 0) { const car = createCar(def); car.position.set(x, 0, z); car.rotation.y = heading; car.userData.heading = heading; scene.add(car); return car; }
-const parkedCars = carCatalog.map((c, i) => parkCar(c, -20 + i * 4.5, 29, 0));
+const parkedCars = carCatalog.map((c, i) => {
+  const car = parkCar(c, -20 + i * 4.5, 29, -Math.PI / 2);
+  car.visible = owned.has(c.id);
+  return car;
+});
 for (let i = 0; i < 8; i++) {
   const def = carCatalog[(i + 1) % carCatalog.length], car = createCar(def, [0x283a54, 0x713b76, 0x3b5660, 0x6a364d][i % 4]);
   car.userData.ai = true; car.userData.route = i * 54; car.userData.aiSpeed = 7 + i % 4 * 1.5;
@@ -155,13 +163,18 @@ const markerRing = new THREE.Mesh(new THREE.TorusGeometry(2.2, .09, 8, 30), M.cy
 const markerBeam = new THREE.Mesh(new THREE.CylinderGeometry(.15, .85, 4, 12, 1, true), new THREE.MeshBasicMaterial({ color: 0x59e8f4, transparent: true, opacity: .16, side: THREE.DoubleSide })); markerBeam.position.y = 2; marker.add(markerBeam);
 
 const objectives = [
-  { title: 'FIRST LIGHT', detail: 'Take a car from the bay and reach Crescent Plaza.', x: 38, z: 32, reward: 650, kind: 'drive' },
-  { title: 'NEON RUN', detail: 'Reach the Crescent plaza before the clock runs out.', x: 91, z: -89, reward: 1100, kind: 'reach' },
-  { title: 'NIGHT SHIFT', detail: 'Visit the Skyline overlook, then return to the garage.', x: 2, z: -56, reward: 1750, kind: 'reach' },
+  { title: 'FIRST LIGHT', detail: 'Take a car from the bay and reach Crescent Plaza.', x: 0, z: 32, reward: 650, kind: 'drive' },
+  { title: 'NEON RUN', detail: 'Reach the Crescent Plaza before the clock runs out.', x: 60, z: -60, reward: 1100, kind: 'reach' },
+  { title: 'NIGHT SHIFT', detail: 'Reach the Skyline overlook before the clock runs out.', x: 0, z: -40, reward: 1750, kind: 'reach' },
   { title: 'DISTRICT TOUR', detail: 'Take a victory lap around the city.', x: -181, z: 181, reward: 2200, kind: 'reach' }
 ];
-let missionIndex = 0, missionActive = false, missionComplete = false, money = 1200, xp = 0;
-let activeCar = null, selectedCar = parkedCars[0], gameStarted = false, paused = false, garageOpen = false, missionTimer = 0;
+let missionIndex = Math.max(0, Number(savedProgress.missionIndex) || 0), missionActive = false, missionComplete = false;
+let money = savedProgress.money == null ? 1200 : Math.max(0, Number(savedProgress.money) || 0), xp = Math.max(0, Number(savedProgress.xp) || 0);
+let activeCar = null, selectedCar = parkedCars.find(car => car.userData.def.id === savedProgress.selectedCar && owned.has(car.userData.def.id)) || parkedCars[0], gameStarted = false, paused = false, garageOpen = false, missionTimer = 0;
+for (const car of parkedCars) {
+  const saved = savedProgress.upgrades?.[car.userData.def.id];
+  if (saved) car.userData.upgrades = { engine: Math.max(0, Math.min(3, Number(saved.engine) || 0)), handling: Math.max(0, Math.min(3, Number(saved.handling) || 0)) };
+}
 let cameraYaw = 0, cameraPitch = .13, dayClock = 0, toastTimer = 0, interactTarget = null;
 let walkTime = 0, nitro = 100, currentScreen = 'menu';
 const keys = new Set();
@@ -190,7 +203,15 @@ ui.innerHTML = `
 const hud = $('#hud'), modal = $('#modal'), modalContent = $('#modal-content'), promptEl = $('#prompt'), toastEl = $('#toast');
 const moneyEl = $('#money'), missionTitleEl = $('#mission-title'), missionTextEl = $('#mission-text');
 function showToast(message) { toastEl.textContent = message; toastEl.classList.remove('hidden'); toastTimer = 2.8; }
-function setMoney(value) { money = Math.max(0, Math.floor(value)); moneyEl.textContent = fmt(money); }
+function saveProgress() {
+  try {
+    localStorage.setItem('neon-district-save', JSON.stringify({
+      money, xp, missionIndex, owned: [...owned], selectedCar: selectedCar?.userData.def.id || 'Vanta R',
+      upgrades: Object.fromEntries(parkedCars.map(car => [car.userData.def.id, car.userData.upgrades]))
+    }));
+  } catch { /* The game remains playable when storage is unavailable. */ }
+}
+function setMoney(value) { money = Math.max(0, Math.floor(value)); moneyEl.textContent = fmt(money); saveProgress(); }
 function updateMissionPanel() {
   const mission = objectives[missionIndex % objectives.length];
   $('#mission-label').textContent = missionActive ? `CONTRACT ${String(missionIndex + 1).padStart(2, '0')} · IN PROGRESS` : 'AVAILABLE CONTRACT';
@@ -201,7 +222,8 @@ function updateMissionPanel() {
 function startGame() {
   gameStarted = true; paused = false; currentScreen = 'game';
   $('#menu-screen').classList.add('hidden'); $('#pause-screen').classList.add('hidden'); hud.classList.remove('hidden');
-  updateMissionPanel(); showToast('Welcome to Neon Central. Find a car or head to the contract marker.');
+  moneyEl.textContent = fmt(money);
+  updateMissionPanel(); showToast('Welcome to Neon Central. Start the contract at the cyan beacon, then take a car.');
 }
 function showModal(html) { modalContent.innerHTML = html; modal.classList.remove('hidden'); }
 function closeModal() { modal.classList.add('hidden'); garageOpen = false; }
@@ -220,12 +242,12 @@ function renderGarage() {
   showModal(`<div class="eyebrow">NEON CENTRAL · SERVICE BAY</div><h2>YOUR GARAGE<span>.</span></h2><p class="modal-lede">Choose a ride. Tune it up. Take it outside.</p><div class="garage-balance">AVAILABLE CREDITS <b>${fmt(money)} CR</b></div><div class="car-list">${cars}</div><div class="upgrade-row"><span><b>PERFORMANCE TUNING</b><small>ENGINE +12% SPEED · HANDLING +10%</small></span><button class="btn small" id="upgrade-engine">ENGINE · 900 CR</button><button class="btn small" id="upgrade-handling">HANDLING · 700 CR</button></div><div class="modal-actions"><button class="btn" id="garage-close">CLOSE GARAGE</button></div>`);
   for (const button of modalContent.querySelectorAll('[data-car]')) button.onclick = () => {
     const def = carCatalog.find(c => c.id === button.dataset.car);
-    if (!owned.has(def.id)) { if (money < def.price) { showToast('Not enough credits. Complete a contract to earn more.'); return; } setMoney(money - def.price); owned.add(def.id); showToast(`${def.id} added to your collection.`); }
+    if (!owned.has(def.id)) { if (money < def.price) { showToast('Not enough credits. Complete a contract to earn more.'); return; } owned.add(def.id); setMoney(money - def.price); showToast(`${def.id} added to your collection.`); }
     selectedCar = parkedCars[carCatalog.indexOf(def)];
     selectedCar.visible = true; selectedCar.userData.speed = 0;
     selectedCar.position.set(-20 + carCatalog.indexOf(def) * 4.5, 0, 29);
-    selectedCar.userData.heading = Math.PI; selectedCar.rotation.y = Math.PI;
-    $('#vehicle-name').textContent = def.id.toUpperCase(); closeModal(); showToast(`${def.id} selected. Find it at the garage bay.`);
+    selectedCar.userData.heading = -Math.PI / 2; selectedCar.rotation.y = -Math.PI / 2;
+    $('#vehicle-name').textContent = def.id.toUpperCase(); saveProgress(); closeModal(); showToast(`${def.id} selected. Find it at the garage bay.`);
   };
   $('#garage-close').onclick = closeModal;
   $('#upgrade-engine').onclick = () => purchaseUpgrade('engine', 900);
@@ -236,7 +258,7 @@ function purchaseUpgrade(kind, price) {
   if (money < price) { showToast('Not enough credits.'); return; }
   const upgrades = selectedCar.userData.upgrades;
   if (upgrades[kind] >= 3) { showToast(`${kind} tuning is already maxed.`); return; }
-  upgrades[kind]++; setMoney(money - price); showToast(`${kind.toUpperCase()} tuning installed · LEVEL ${upgrades[kind]}`); renderGarage();
+  upgrades[kind]++; setMoney(money - price); saveProgress(); showToast(`${kind.toUpperCase()} tuning installed · LEVEL ${upgrades[kind]}`); renderGarage();
 }
 function interact() {
   if (!gameStarted || paused || garageOpen) return;
@@ -258,8 +280,8 @@ function finishMission() {
   const objective = objectives[missionIndex % objectives.length];
   missionActive = false; missionComplete = true; setMoney(money + objective.reward); xp += 250;
   showToast(`${objective.title} complete · +${fmt(objective.reward)} CR · +250 XP`);
-  missionIndex++; updateMissionPanel();
-  const next = objectives[missionIndex % objectives.length]; marker.position.set(next.x, .15, next.z);
+  missionIndex++; saveProgress(); updateMissionPanel();
+  marker.position.set(-18, .15, 31);
 }
 function enterCar(car) {
   activeCar = car; car.userData.speed = 0; character.visible = false;
@@ -278,7 +300,12 @@ function exitCar() {
 $('#start-btn').onclick = startGame;
 $('#how-btn').onclick = () => showModal(`<div class="eyebrow">QUICK START</div><h2>OWN THE NIGHT<span>.</span></h2><p class="modal-lede">Explore freely, hop into any parked car, and take contracts for credits. Use the central neon garage to switch vehicles and tune your ride.</p><div class="key-list"><span><b>W A S D</b> Move / steer</span><span><b>E</b> Interact / enter / exit</span><span><b>SHIFT</b> Sprint / nitro</span><span><b>SPACE · C</b> Jump · crouch</span><span><b>ESC</b> Pause</span></div><div class="modal-actions"><button class="btn primary" id="how-close">GOT IT</button></div>`);
 $('#pause-btn').onclick = openPause; $('#resume-btn').onclick = resumeGame; $('#settings-btn').onclick = openSettings;
-$('#quit-btn').onclick = () => { paused = false; gameStarted = false; currentScreen = 'menu'; $('#pause-screen').classList.add('hidden'); hud.classList.add('hidden'); $('#menu-screen').classList.remove('hidden'); };
+$('#quit-btn').onclick = () => {
+  paused = false; gameStarted = false; currentScreen = 'menu'; missionActive = false;
+  if (activeCar) { activeCar.userData.speed = 0; activeCar = null; character.visible = true; }
+  $('#vehicle-hud').classList.add('hidden'); $('#pause-screen').classList.add('hidden'); hud.classList.add('hidden');
+  $('#menu-screen').classList.remove('hidden'); marker.position.set(-18, .15, 31); saveProgress();
+};
 $('#modal-close').onclick = closeModal;
 modal.addEventListener('click', e => { if (e.target === modal) closeModal(); });
 ui.addEventListener('click', e => { if (e.target.id === 'how-close') closeModal(); });
@@ -313,18 +340,18 @@ function nearestInteraction() {
   const px = activeCar ? activeCar.position.x : player.pos.x, pz = activeCar ? activeCar.position.z : player.pos.z;
   const garageDist = Math.hypot(px + 8, pz - 11);
   if (!activeCar && garageDist < 8) { nearest = { type: 'garage', distance: garageDist }; dist = garageDist; }
+  const target = missionActive ? marker.position : new THREE.Vector3(-18, .1, 31);
+  const missionDist = Math.hypot(px - target.x, pz - target.z);
+  // The contract beacon takes precedence over the tightly parked cars around it.
+  if (!activeCar && !missionActive && missionDist < 7) { nearest = { type: 'mission', distance: missionDist }; dist = missionDist; }
   if (activeCar) {
     nearest = { type: 'car', car: activeCar, distance: 0 };
     dist = 0;
-  } else for (const car of parkedCars) {
+  } else if (nearest?.type !== 'mission') for (const car of parkedCars) {
     if (!car.visible) continue;
     const d = Math.hypot(px - car.position.x, pz - car.position.z);
     if (d < 4.8 && d < dist) { nearest = { type: 'car', car, distance: d }; dist = d; }
   }
-  const currentObjective = objectives[missionIndex % objectives.length];
-  const target = missionActive ? marker.position : new THREE.Vector3(-18, .1, 31);
-  const missionDist = Math.hypot(px - target.x, pz - target.z);
-  if (!missionActive && missionDist < 7 && missionDist < dist) { nearest = { type: 'mission', distance: missionDist }; dist = missionDist; }
   interactTarget = nearest;
   if (nearest) {
     let prompt;
@@ -333,7 +360,9 @@ function nearestInteraction() {
     else prompt = '[ E ]  START CONTRACT';
     promptEl.textContent = prompt; promptEl.classList.remove('hidden');
   } else promptEl.classList.add('hidden');
-  $('#mission-distance').textContent = missionActive ? `${Math.max(0, Math.round(missionDist))} M TO OBJECTIVE` : 'CONTRACT READY';
+  $('#mission-distance').textContent = missionActive
+    ? `${Math.max(0, Math.round(missionDist))} M · ${Math.floor(missionTimer / 60)}:${String(Math.floor(missionTimer % 60)).padStart(2, '0')}`
+    : 'CONTRACT READY';
   const miniX = clamp((px + 230) / 460 * 100, 4, 96), miniY = clamp((pz + 230) / 460 * 100, 4, 96);
   $('.map-player').style.left = `${miniX}%`; $('.map-player').style.top = `${miniY}%`;
   const ox = missionActive ? marker.position.x : -18, oz = missionActive ? marker.position.z : 31;
@@ -489,7 +518,7 @@ function animate() {
     if (activeCar) updateCar(dt); else updateOnFoot(dt);
     if (missionActive) {
       missionTimer -= dt;
-      if (missionTimer <= 0) { missionActive = false; updateMissionPanel(); showToast('Contract expired. Return to the cyan marker and try again.'); }
+      if (missionTimer <= 0) { missionActive = false; marker.position.set(-18, .15, 31); updateMissionPanel(); showToast('Contract expired. Return to the cyan beacon to try again.'); }
       const target = marker.position;
       const distance = Math.hypot((activeCar ? activeCar.position.x : player.pos.x) - target.x, (activeCar ? activeCar.position.z : player.pos.z) - target.z);
       const objective = objectives[missionIndex % objectives.length];
